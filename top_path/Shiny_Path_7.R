@@ -1318,6 +1318,13 @@ server <- function(input, output, session) {
       RecClus_t <- getHighExpGene(GCMat, BarCluTable, RecClu_t, LigClu_t, pval, logfc, cores)
       saveRDS(RecClus_t, file.path(cache_dir, paste0(diff_target_cell, "_enriched.rds")))
       
+      # make these the canonical in-memory objects used later
+      enrich_1 <- RecClus
+      enrich_2 <- RecClus_t
+      
+      # optional: save copies in temp (harmless, but we won't read them)
+      #saveRDS(enrich_1, file.path(cache_dir, paste0(receiver_cell, "_enriched.rds")))
+     # saveRDS(enrich_2, file.path(cache_dir, paste0(diff_target_cell, "_enriched.rds")))
       
       ## === talklr Rdata check ===
       talklr_file <- file.path(cache_dir, paste0("talklr_", receiver_cell, ".Rdata"))
@@ -1381,8 +1388,8 @@ server <- function(input, output, session) {
       write.table(clustering, barfile, sep = "\t", row.names = FALSE)
       BarCluFile <- barfile
       BarCluTable <- read.table(BarCluFile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-      enrich_1 <- readRDS(paste0(meta.file,"/", receiver_cell, "_enriched.rds"))
-      enrich_2 <- readRDS(paste0(meta.file,"/", diff_target_cell, "_enriched.rds"))
+      #enrich_1 <- readRDS(paste0(meta.file,"/", receiver_cell, "_enriched.rds"))
+      #enrich_2 <- readRDS(paste0(meta.file,"/", diff_target_cell, "_enriched.rds"))
       deg <- readRDS(deg_file)
       filtered <- c(
         setdiff(intersect(c(enrich_2), c(subset(deg, deg$State %in% c("down", "up"))$Gene)), enrich_1),
