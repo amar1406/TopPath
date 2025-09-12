@@ -39,9 +39,8 @@ library(RColorBrewer)
 #pathway_choices <- readLines("top_path/pathways.txt")
 #pathway_choices_with_all <- c("All", pathway_choices)
 
-out.file <- "top_path_output"
-user.file <- "shiny_path"
-meta.file <- paste0(out.file, "/", user.file, "/metadata")
+meta.file <- tempdir()
+
 CellChatDB <- readRDS("database/CellChatDB.rds")
 receptor_ligand <- read.csv("database/receptor_ligand.csv")
 #receptor_ligand <- receptor_ligand[ , -14]
