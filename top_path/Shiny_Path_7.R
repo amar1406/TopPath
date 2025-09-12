@@ -1286,180 +1286,90 @@ server <- function(input, output, session) {
       }
       
       ## === Enrichment checks (receiver & target) ===
-      enrich_1_file <- paste0(meta.file, "/", receiver_cell, "_enriched.rds")
-      enrich_2_file <- paste0(meta.file, "/", diff_target_cell, "_enriched.rds")
-      if (file.exists(enrich_1_file)) {
-        RecClus <- readRDS(enrich_1_file)
-        message("Loaded existing enrichment for: ", receiver_cell)
-      } else {
-        temp_cds_r <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% in_groups]
-        colData(temp_cds_r)[[input$clustering_col]] <- droplevels(colData(temp_cds_r)[[input$clustering_col]])
-        GCMat <- counts(temp_cds_r)
-        rownames(GCMat) <- rowData(temp_cds_r)$gene_short_name
-        colnames(GCMat) <- as.character(colnames(temp_cds_r))
-        clustering <- data.frame(Barcode = colnames(temp_cds_r), Cluster = colData(temp_cds_r)[[input$clustering_col]])
-        write.table(clustering, "database/barcodetype.txt", sep = "\t")
-        BarCluFile <- "database/barcodetype.txt"
-        BarCluTable <- read.table(BarCluFile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-        RecClu <- receiver_cell
-        LigClu <- setdiff(in_groups, c(RecClu, diff_target_cell))
-        pval <- 0.15
-        logfc <- 0.15
-        cores_num <- parallel::detectCores()
-        cores <- ifelse(cores_num > 1, cores_num - 1, 1)
-        RecClus <- getHighExpGene(GCMat, BarCluTable, RecClu, LigClu, pval, logfc, cores)
-        saveRDS(RecClus, enrich_1_file)
-      }
-      if (file.exists(enrich_2_file)) {
-        RecClus_t <- readRDS(enrich_2_file)
-        message("Loaded existing enrichment for: ", diff_target_cell)
-      } else {
-        temp_cds_r <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% in_groups]
-        colData(temp_cds_r)[[input$clustering_col]] <- droplevels(colData(temp_cds_r)[[input$clustering_col]])
-        GCMat <- counts(temp_cds_r)
-        rownames(GCMat) <- rowData(temp_cds_r)$gene_short_name
-        colnames(GCMat) <- as.character(colnames(temp_cds_r))
-        clustering <- data.frame(Barcode = colnames(temp_cds_r), Cluster = colData(temp_cds_r)[[input$clustering_col]])
-        write.table(clustering, "database/barcodetype.txt", sep = "\t")
-        BarCluFile <- "database/barcodetype.txt"
-        BarCluTable <- read.table(BarCluFile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-        RecClu_t <- diff_target_cell
-        LigClu_t <- setdiff(in_groups, RecClu_t)
-        pval <- 0.15
-        logfc <- 0.15
-        cores_num <- parallel::detectCores()
-        cores <- ifelse(cores_num > 1, cores_num - 1, 1)
-        RecClus_t <- getHighExpGene(GCMat, BarCluTable, RecClu_t, LigClu_t, pval, logfc, cores)
-        saveRDS(RecClus_t, enrich_2_file)
-      }
+      # Use a session/temp cache directory for generated files
+      cache_dir <- file.path(tempdir(), "app-cache")
+      dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
+      
+      # --- Enrichment (receiver) ---
+      temp_cds_r <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% in_groups]
+      colData(temp_cds_r)[[input$clustering_col]] <- droplevels(colData(temp_cds_r)[[input$clustering_col]])
+      GCMat <- counts(temp_cds_r)
+      rownames(GCMat) <- rowData(temp_cds_r)$gene_short_name
+      colnames(GCMat) <- as.character(colnames(temp_cds_r))
+      
+      clustering <- data.frame(Barcode = colnames(temp_cds_r),
+                               Cluster = colData(temp_cds_r)[[input$clustering_col]])
+      barfile <- file.path(cache_dir, "barcodetype.txt")
+      write.table(clustering, barfile, sep = "\t", row.names = FALSE)
+      BarCluTable <- read.table(barfile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+      
+      RecClu <- receiver_cell
+      LigClu <- setdiff(in_groups, c(RecClu, diff_target_cell))
+      pval <- 0.15; logfc <- 0.15
+      cores <- max(1, parallel::detectCores() - 1)
+      
+      RecClus <- getHighExpGene(GCMat, BarCluTable, RecClu, LigClu, pval, logfc, cores)
+      # optionally save to temp cache (not database/)
+      saveRDS(RecClus, file.path(cache_dir, paste0(receiver_cell, "_enriched.rds")))
+      
+      # --- Enrichment (target) ---
+      RecClu_t <- diff_target_cell
+      LigClu_t <- setdiff(in_groups, RecClu_t)
+      RecClus_t <- getHighExpGene(GCMat, BarCluTable, RecClu_t, LigClu_t, pval, logfc, cores)
+      saveRDS(RecClus_t, file.path(cache_dir, paste0(diff_target_cell, "_enriched.rds")))
+      
       
       ## === talklr Rdata check ===
-      talklr_file <- paste0(meta.file, "/talklr_", receiver_cell, ".Rdata")
-      if (file.exists(talklr_file)) {
-        load(talklr_file)
-        # keep a tiny default so edges aren’t all filtered out
-        thresh_exprs <- get0("thresh_exprs") %||% 9.09563e-09
-        assign("thresh_exprs", thresh_exprs, inherits = TRUE)
-        updateSliderInput(
-          session, "talklr_thresh",
-          value = thresh_exprs,
-          min   = 0,
-          max   = max(thresh_exprs * 50, 1e-3),
-          step  = signif(thresh_exprs / 5, 2)
-        )
-      }
-      else {
-        temp_cds2 <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% c(receiver_cell, in_groups)] #diff_target_cell
-        colData(temp_cds2)[[input$clustering_col]] <- droplevels(colData(temp_cds2)[[input$clustering_col]])
-        cell_group_df <- data.frame(cell = colnames(temp_cds2), group = colData(temp_cds2)[[input$clustering_col]])
-        glom_normal <- aggregate_gene_expression(temp_cds2, cell_group_df = cell_group_df, norm_method = "size_only")
-        rownames(glom_normal) <- rowData(temp_cds2)$gene_short_name
-        glom_normal <- glom_normal / as.vector(table(colData(temp_cds2)[[input$clustering_col]]))
-        glom_normal <- as.data.frame(glom_normal)
-        glom_normal$genes <- rownames(glom_normal)
-        glom_normal <- glom_normal[, c(ncol(glom_normal), 1:(ncol(glom_normal)-1))]
-        print("glom_normal:")
-        print(glom_normal)
-        min_exprs <- 1.713682e-11
-        thresh_exprs <- .909563e-08
-        # keep the threshold around and sync the slider to it
-        assign("thresh_exprs", thresh_exprs, inherits = TRUE)
-        updateSliderInput(
-          session, "talklr_thresh",
-          value = thresh_exprs,
-          min   = 0,
-          max   = max(thresh_exprs * 50, 1e-3),
-          step  = signif(thresh_exprs / 5, 2)
-        )
-        
-        path_included <- selected_paths()
-        req(length(path_included) > 0)  # guard against empty selection
-        
-        receptor_ligand_sub <- receptor_ligand[receptor_ligand$pathway_name %in% path_included, ]
-        print("path_included:")
-        print(path_included)
-        print("receptor_ligand_sub:")
-        print(receptor_ligand_sub)
-        # Make sure glom_normal$genes is character and upper-case
-        glom_normal$genes <- toupper(as.character(glom_normal$genes))
-        
-        cat("First 10 glom_normal$genes:\n")
-        print(head(glom_normal$genes, 10))
-        
-        cat("First 10 Ligand.ApprovedSymbol:\n")
-        print(head(receptor_ligand_sub$Ligand.ApprovedSymbol, 10))
-        
-        cat("First 10 Receptor.ApprovedSymbol:\n")
-        print(head(receptor_ligand_sub$Receptor.ApprovedSymbol, 10))
-        
-        cat("Number of genes in both glom_normal$genes and ligand symbols:\n")
-        print(length(intersect(glom_normal$genes, receptor_ligand_sub$Ligand.ApprovedSymbol)))
-        
-        cat("Number of genes in both glom_normal$genes and receptor symbols:\n")
-        print(length(intersect(glom_normal$genes, receptor_ligand_sub$Receptor.ApprovedSymbol)))
-        
-        cat("Number of ligand-receptor pairs with both genes expressed:\n")
-        n_expressed_pairs <- nrow(receptor_ligand_sub[
-          receptor_ligand_sub$Ligand.ApprovedSymbol %in% glom_normal$genes &
-            receptor_ligand_sub$Receptor.ApprovedSymbol %in% glom_normal$genes, ])
-        print(n_expressed_pairs)
-        cat("Column classes of glom_normal before passing to make_expressed_net:\n")
-        print(sapply(glom_normal, class))
-        
-        # Convert all expression columns to numeric (except first column, 'genes')
-        glom_normal[, 2:ncol(glom_normal)] <- lapply(glom_normal[, 2:ncol(glom_normal)], as.numeric)
-        
-        # Optional: check for NAs (indicating conversion failed on some values)
-        cat("Any NA in glom_normal?\n")
-        print(any(is.na(as.matrix(glom_normal[, 2:ncol(glom_normal)]))))
-        
-        
-        lr_glom_normal <- make_expressed_net(
-          glom_normal,
-          expressed_thresh = as.numeric(thresh_exprs),
-          receptor_ligand_sub,
-          KL_method   = "product",
-          pseudo_count = as.numeric(min_exprs)
-        )
-        
-        lr_glom_normal <- dplyr::arrange(lr_glom_normal, dplyr::desc(KL))
-        lr_glom_normal <- lr_glom_normal[lr_glom_normal$Pair.Evidence == "literature supported", ]
-        
-        lr_glom_normal <- coerce_lr_numeric_blocks(lr_glom_normal, glom_normal)
-        blk <- detect_lr_blocks(lr_glom_normal, glom_normal)
-        if (length(blk$lig) && length(blk$rec)) {
-          na_l <- sum(!is.finite(as.matrix(lr_glom_normal[, blk$lig, drop = FALSE])))
-          na_r <- sum(!is.finite(as.matrix(lr_glom_normal[, blk$rec, drop = FALSE])))
-          message(sprintf("LR numeric NA counts — ligand: %d, receptor: %d", na_l, na_r))
-        }
-        
-        
-        # <<< NEW: restrict to receiver and write zeros back inside lr_glom_normal >>>
-        lr_glom_normal <- restrict_lr_to_receiver(
-          lr = lr_glom_normal,
-          gl = glom_normal,
-          receiver_id     = input$receiver_cell,   # full label (not abbr)
-          expressed_thresh = as.numeric(thresh_exprs),
-          min_edge_frac    = 0.00,
-          allow_self       = TRUE
-        )
-        
-        # (optional) sanity checks
-        blk <- detect_lr_blocks(lr_glom_normal, glom_normal)
-        cells <- colnames(glom_normal)[-1]; rcol <- match(input$receiver_cell, cells)
-        stopifnot(
-          nrow(lr_glom_normal) == 0 ||
-            all(colSums(as.matrix(lr_glom_normal[, blk$rec[-rcol], drop = FALSE])) == 0)
-        )
-        
-        save(list = c("lr_glom_normal", "glom_normal",  "deg"),
-             file = talklr_file)
-      }
-      print("lr_glom_normal:")
-      print(lr_glom_normal)
-      # ===== after the talklr if/else that builds/loads lr_glom_normal & glom_normal =====
+      talklr_file <- file.path(cache_dir, paste0("talklr_", receiver_cell, ".Rdata"))
+      
+      # Always recompute
+      temp_cds2 <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% c(receiver_cell, in_groups)]
+      colData(temp_cds2)[[input$clustering_col]] <- droplevels(colData(temp_cds2)[[input$clustering_col]])
+      
+      cell_group_df <- data.frame(cell = colnames(temp_cds2),
+                                  group = colData(temp_cds2)[[input$clustering_col]])
+      glom_normal <- aggregate_gene_expression(temp_cds2, cell_group_df = cell_group_df, norm_method = "size_only")
+      rownames(glom_normal) <- rowData(temp_cds2)$gene_short_name
+      glom_normal <- glom_normal / as.vector(table(colData(temp_cds2)[[input$clustering_col]]))
+      glom_normal <- as.data.frame(glom_normal)
+      glom_normal$genes <- toupper(as.character(rownames(glom_normal)))
+      glom_normal <- glom_normal[, c(ncol(glom_normal), 1:(ncol(glom_normal)-1))]
+      glom_normal[, 2:ncol(glom_normal)] <- lapply(glom_normal[, 2:ncol(glom_normal)], as.numeric)
+      
+      min_exprs <- 1.713682e-11
+      thresh_exprs <- 0.909563e-08
+      assign("thresh_exprs", thresh_exprs, inherits = TRUE)
+      updateSliderInput(session, "talklr_thresh",
+                        value = thresh_exprs, min = 0,
+                        max = max(thresh_exprs * 50, 1e-3),
+                        step = signif(thresh_exprs / 5, 2)
+      )
+      
+      path_included <- selected_paths(); req(length(path_included) > 0)
+      receptor_ligand_sub <- receptor_ligand[receptor_ligand$pathway_name %in% path_included, ]
+      
+      lr_glom_normal <- make_expressed_net(
+        glom_normal,
+        expressed_thresh = as.numeric(thresh_exprs),
+        receptor_ligand_sub,
+        KL_method   = "product",
+        pseudo_count = as.numeric(min_exprs)
+      )
+      lr_glom_normal <- dplyr::arrange(lr_glom_normal, dplyr::desc(KL))
+      lr_glom_normal <- lr_glom_normal[lr_glom_normal$Pair.Evidence == "literature supported", ]
+      lr_glom_normal <- coerce_lr_numeric_blocks(lr_glom_normal, glom_normal)
+      
+      lr_glom_normal <- restrict_lr_to_receiver(
+        lr = lr_glom_normal, gl = glom_normal,
+        receiver_id = input$receiver_cell, expressed_thresh = as.numeric(thresh_exprs),
+        min_edge_frac = 0.00, allow_self = TRUE
+      )
+      
+      save(list = c("lr_glom_normal", "glom_normal", "deg"), file = talklr_file)
+      
       talklr_store$lr   <- lr_glom_normal
       talklr_store$glom <- glom_normal
+      
       
       temp_cds2 <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% c(receiver_cell, diff_target_cell, in_groups)]
       colData(temp_cds2)[[input$clustering_col]] <- droplevels(colData(temp_cds2)[[input$clustering_col]])
@@ -1467,8 +1377,9 @@ server <- function(input, output, session) {
       rownames(GCMat) <- rowData(temp_cds2)$gene_short_name
       colnames(GCMat) <- as.character(colnames(temp_cds2))
       clustering <- data.frame(Barcode = colnames(temp_cds2), Cluster = colData(temp_cds2)[[input$clustering_col]])
-      write.table(clustering, "database/barcodetype.txt", sep = "\t")
-      BarCluFile <- "database/barcodetype.txt"
+      barfile <- file.path(cache_dir, "barcodetype.txt")
+      write.table(clustering, barfile, sep = "\t", row.names = FALSE)
+      BarCluFile <- barfile
       BarCluTable <- read.table(BarCluFile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
       enrich_1 <- readRDS(paste0(meta.file,"/", receiver_cell, "_enriched.rds"))
       enrich_2 <- readRDS(paste0(meta.file,"/", diff_target_cell, "_enriched.rds"))
