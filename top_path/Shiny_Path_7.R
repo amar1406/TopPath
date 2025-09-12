@@ -1285,56 +1285,67 @@ server <- function(input, output, session) {
         }
       }
       
-      ## === Enrichment checks (receiver & target) ===
-      # Use a session/temp cache directory for generated files
-      cache_dir <- file.path(tempdir(), "app-cache")
-      dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
+      ## === Enrichment + talklr (stable on-disk cache; no tempdir, no reloads) ===
       
-      # --- Enrichment (receiver) ---
+      # 0) Stable cache inside the project (survives restarts; portable)
+      cache_dir <- "cache"
+      if (!dir.exists(cache_dir)) dir.create(cache_dir, recursive = TRUE)
+      
+      # --- Enrichment (receiver & target) ---
+      
+      # Common objects for enrichment
       temp_cds_r <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% in_groups]
       colData(temp_cds_r)[[input$clustering_col]] <- droplevels(colData(temp_cds_r)[[input$clustering_col]])
+      
       GCMat <- counts(temp_cds_r)
       rownames(GCMat) <- rowData(temp_cds_r)$gene_short_name
       colnames(GCMat) <- as.character(colnames(temp_cds_r))
       
-      clustering <- data.frame(Barcode = colnames(temp_cds_r),
-                               Cluster = colData(temp_cds_r)[[input$clustering_col]])
+      # Write clustering file into cache (NOT database/)
       barfile <- file.path(cache_dir, "barcodetype.txt")
+      clustering <- data.frame(
+        Barcode = colnames(temp_cds_r),
+        Cluster = colData(temp_cds_r)[[input$clustering_col]],
+        check.names = FALSE
+      )
       write.table(clustering, barfile, sep = "\t", row.names = FALSE)
       BarCluTable <- read.table(barfile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
       
-      RecClu <- receiver_cell
-      LigClu <- setdiff(in_groups, c(RecClu, diff_target_cell))
-      pval <- 0.15; logfc <- 0.15
+      pval  <- 0.15
+      logfc <- 0.15
       cores <- max(1, parallel::detectCores() - 1)
       
+      # Receiver enrichment
+      RecClu  <- receiver_cell
+      LigClu  <- setdiff(in_groups, c(RecClu, diff_target_cell))
       RecClus <- getHighExpGene(GCMat, BarCluTable, RecClu, LigClu, pval, logfc, cores)
-      # optionally save to temp cache (not database/)
-      saveRDS(RecClus, file.path(cache_dir, paste0(receiver_cell, "_enriched.rds")))
       
-      # --- Enrichment (target) ---
-      RecClu_t <- diff_target_cell
-      LigClu_t <- setdiff(in_groups, RecClu_t)
+      # Target enrichment
+      RecClu_t  <- diff_target_cell
+      LigClu_t  <- setdiff(in_groups, RecClu_t)
       RecClus_t <- getHighExpGene(GCMat, BarCluTable, RecClu_t, LigClu_t, pval, logfc, cores)
-      saveRDS(RecClus_t, file.path(cache_dir, paste0(diff_target_cell, "_enriched.rds")))
       
-      # make these the canonical in-memory objects used later
+      # Canonical names used later; keep in memory
       enrich_1 <- RecClus
       enrich_2 <- RecClus_t
       
-      # optional: save copies in temp (harmless, but we won't read them)
-      #saveRDS(enrich_1, file.path(cache_dir, paste0(receiver_cell, "_enriched.rds")))
-     # saveRDS(enrich_2, file.path(cache_dir, paste0(diff_target_cell, "_enriched.rds")))
+      # (Optional) Save snapshots for debugging (we don't read them back)
+      saveRDS(enrich_1, file.path(cache_dir, paste0(receiver_cell, "_enriched.rds")))
+      saveRDS(enrich_2, file.path(cache_dir, paste0(diff_target_cell, "_enriched.rds")))
       
-      ## === talklr Rdata check ===
+      # --- talklr: always recompute; do NOT load old .Rdata ---
+      
       talklr_file <- file.path(cache_dir, paste0("talklr_", receiver_cell, ".Rdata"))
       
-      # Always recompute
       temp_cds2 <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% c(receiver_cell, in_groups)]
       colData(temp_cds2)[[input$clustering_col]] <- droplevels(colData(temp_cds2)[[input$clustering_col]])
       
-      cell_group_df <- data.frame(cell = colnames(temp_cds2),
-                                  group = colData(temp_cds2)[[input$clustering_col]])
+      cell_group_df <- data.frame(
+        cell  = colnames(temp_cds2),
+        group = colData(temp_cds2)[[input$clustering_col]],
+        check.names = FALSE
+      )
+      
       glom_normal <- aggregate_gene_expression(temp_cds2, cell_group_df = cell_group_df, norm_method = "size_only")
       rownames(glom_normal) <- rowData(temp_cds2)$gene_short_name
       glom_normal <- glom_normal / as.vector(table(colData(temp_cds2)[[input$clustering_col]]))
@@ -1343,13 +1354,14 @@ server <- function(input, output, session) {
       glom_normal <- glom_normal[, c(ncol(glom_normal), 1:(ncol(glom_normal)-1))]
       glom_normal[, 2:ncol(glom_normal)] <- lapply(glom_normal[, 2:ncol(glom_normal)], as.numeric)
       
-      min_exprs <- 1.713682e-11
+      min_exprs    <- 1.713682e-11
       thresh_exprs <- 0.909563e-08
       assign("thresh_exprs", thresh_exprs, inherits = TRUE)
-      updateSliderInput(session, "talklr_thresh",
-                        value = thresh_exprs, min = 0,
-                        max = max(thresh_exprs * 50, 1e-3),
-                        step = signif(thresh_exprs / 5, 2)
+      updateSliderInput(
+        session, "talklr_thresh",
+        value = thresh_exprs, min = 0,
+        max = max(thresh_exprs * 50, 1e-3),
+        step = signif(thresh_exprs / 5, 2)
       )
       
       path_included <- selected_paths(); req(length(path_included) > 0)
@@ -1359,7 +1371,7 @@ server <- function(input, output, session) {
         glom_normal,
         expressed_thresh = as.numeric(thresh_exprs),
         receptor_ligand_sub,
-        KL_method   = "product",
+        KL_method    = "product",
         pseudo_count = as.numeric(min_exprs)
       )
       lr_glom_normal <- dplyr::arrange(lr_glom_normal, dplyr::desc(KL))
@@ -1368,29 +1380,45 @@ server <- function(input, output, session) {
       
       lr_glom_normal <- restrict_lr_to_receiver(
         lr = lr_glom_normal, gl = glom_normal,
-        receiver_id = input$receiver_cell, expressed_thresh = as.numeric(thresh_exprs),
-        min_edge_frac = 0.00, allow_self = TRUE
+        receiver_id      = input$receiver_cell,
+        expressed_thresh = as.numeric(thresh_exprs),
+        min_edge_frac    = 0.00,
+        allow_self       = TRUE
       )
       
+      # Save for debugging (optional); main objects stay in memory
       save(list = c("lr_glom_normal", "glom_normal", "deg"), file = talklr_file)
       
       talklr_store$lr   <- lr_glom_normal
       talklr_store$glom <- glom_normal
       
+      # --- Downstream section using deg / enrich_* ---
       
       temp_cds2 <- cds_data()[, colData(cds_data())[[input$clustering_col]] %in% c(receiver_cell, diff_target_cell, in_groups)]
       colData(temp_cds2)[[input$clustering_col]] <- droplevels(colData(temp_cds2)[[input$clustering_col]])
+      
       GCMat <- counts(temp_cds2)
       rownames(GCMat) <- rowData(temp_cds2)$gene_short_name
       colnames(GCMat) <- as.character(colnames(temp_cds2))
-      clustering <- data.frame(Barcode = colnames(temp_cds2), Cluster = colData(temp_cds2)[[input$clustering_col]])
+      
+      clustering <- data.frame(
+        Barcode = colnames(temp_cds2),
+        Cluster = colData(temp_cds2)[[input$clustering_col]],
+        check.names = FALSE
+      )
       barfile <- file.path(cache_dir, "barcodetype.txt")
       write.table(clustering, barfile, sep = "\t", row.names = FALSE)
-      BarCluFile <- barfile
+      BarCluFile  <- barfile
       BarCluTable <- read.table(BarCluFile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-      #enrich_1 <- readRDS(paste0(meta.file,"/", receiver_cell, "_enriched.rds"))
-      #enrich_2 <- readRDS(paste0(meta.file,"/", diff_target_cell, "_enriched.rds"))
-      deg <- readRDS(deg_file)
+      
+      # Ensure 'deg' exists; read if you have a file, else fallback to empty
+      if (!exists("deg", inherits = TRUE)) {
+        deg <- tryCatch(
+          readRDS(deg_file),
+          error = function(e) data.frame(Gene = character(), State = character(), stringsAsFactors = FALSE)
+        )
+      }
+      
       filtered <- c(
         setdiff(intersect(c(enrich_2), c(subset(deg, deg$State %in% c("down", "up"))$Gene)), enrich_1),
         setdiff(subset(deg, deg$State %in% c("up"))$Gene, c(enrich_1, enrich_2)),
