@@ -1,5 +1,20 @@
 
+## ---- keep BLAS/OMP from oversubscribing (VERY IMPORTANT on 1 vCPU) ----
+Sys.setenv(
+  OMP_NUM_THREADS        = "1",
+  MKL_NUM_THREADS        = "1",
+  OPENBLAS_NUM_THREADS   = "1",
+  BLIS_NUM_THREADS       = "1",
+  VECLIB_MAXIMUM_THREADS = "1"
+)
 
+## ---- make future/foreach single-threaded unless we opt-in ----
+options(future.fork.enable = FALSE)  # required on Linux/Connect
+suppressPackageStartupMessages({
+  library(future)
+  library(doFuture)
+})
+registerDoFuture()
 
 
 library(shiny)
